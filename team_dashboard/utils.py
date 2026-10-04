@@ -3,6 +3,7 @@ import random
 import string
 import secrets
 from django.core.mail import EmailMessage, get_connection
+from django.conf import settings
 from django.utils import timezone
 from core.models import EmailConfig
 from account.models import OTPVerification, User
@@ -43,12 +44,10 @@ def generate_secure_password(length=12):
             return password
 
 
-def _get_email_connection():
-    """Return a Django mail connection from the active EmailConfig."""
+def _get_email_connection_and_sender():
+    """Return a Django mail connection and sender from EmailConfig or EMAIL_* settings."""
     config = EmailConfig.objects.filter(is_active=True).first()
-    if not config:
-        return None, None
-    try:
+    if config:
         conn = get_connection(
             backend="django.core.mail.backends.smtp.EmailBackend",
             host=config.host,
@@ -56,23 +55,35 @@ def _get_email_connection():
             username=config.host_user,
             password=config.host_password,
             use_tls=config.tls,
+            use_ssl=config.ssl,
             fail_silently=False,
         )
-        return conn, config
-    except Exception as e:
-        logger.error(f"Failed to initialize email connection: {e}")
-        return None, None
+        sender = f"{config.name or 'RightRoute Support'} <{config.email}>"
+        return conn, sender
+
+    if not getattr(settings, "EMAIL_HOST", None):
+        raise Exception("No active email configuration found.")
+    if not getattr(settings, "EMAIL_HOST_USER", None) or not getattr(settings, "EMAIL_HOST_PASSWORD", None):
+        raise Exception("SMTP email username/password are not configured.")
+
+    conn = get_connection(
+        backend=getattr(settings, "EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend"),
+        host=settings.EMAIL_HOST,
+        port=int(getattr(settings, "EMAIL_PORT", 587)),
+        username=settings.EMAIL_HOST_USER,
+        password=settings.EMAIL_HOST_PASSWORD,
+        use_tls=getattr(settings, "EMAIL_USE_TLS", False),
+        use_ssl=getattr(settings, "EMAIL_USE_SSL", False),
+        fail_silently=False,
+    )
+    sender = getattr(settings, "DEFAULT_FROM_EMAIL", settings.EMAIL_HOST_USER)
+    return conn, sender
 
 
 def send_team_login_otp_email(user, otp_code):
     """
     Sends 6-digit MFA verification code to user's email for Team Dashboard login.
     """
-    conn, config = _get_email_connection()
-    if not conn or not config:
-        logger.warning(f"No active EmailConfig. Team login verification code for {user.email}: {otp_code}")
-        return False
-
     subject = f"RightRoute Team Dashboard Verification Code: {otp_code}"
     body_html = f"""
     <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
@@ -88,7 +99,7 @@ def send_team_login_otp_email(user, otp_code):
     """
 
     try:
-        from_sender = f"{config.name or 'RightRoute Support'} <{config.email}>"
+        conn, from_sender = _get_email_connection_and_sender()
         msg = EmailMessage(
             subject=subject,
             body=body_html,
@@ -101,18 +112,12 @@ def send_team_login_otp_email(user, otp_code):
         return True
     except Exception as e:
         logger.error(f"Failed to send team login OTP email to {user.email}: {e}")
-        return False
-
+        raise
 
 def send_team_manage_otp_email(user, otp_code, action_label="account security"):
     """
     Sends 6-digit verification code to user's email for Manage (Email/Password change).
     """
-    conn, config = _get_email_connection()
-    if not conn or not config:
-        logger.warning(f"No active EmailConfig. Team manage verification code for {user.email} ({action_label}): {otp_code}")
-        return False
-
     subject = f"RightRoute Verification Code for {action_label}: {otp_code}"
     body_html = f"""
     <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
@@ -129,7 +134,7 @@ def send_team_manage_otp_email(user, otp_code, action_label="account security"):
     """
 
     try:
-        from_sender = f"{config.name or 'RightRoute Support'} <{config.email}>"
+        conn, from_sender = _get_email_connection_and_sender()
         msg = EmailMessage(
             subject=subject,
             body=body_html,
@@ -142,8 +147,7 @@ def send_team_manage_otp_email(user, otp_code, action_label="account security"):
         return True
     except Exception as e:
         logger.error(f"Failed to send manage OTP email to {user.email}: {e}")
-        return False
-
+        raise
 
 def generate_and_send_team_otp(user, request=None):
     """
