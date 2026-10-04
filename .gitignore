@@ -133,7 +133,6 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
 .venv
 env/
 venv/
@@ -265,7 +264,6 @@ poetry.toml
 pyrightconfig.json
 
 ### VisualStudioCode ###
-.vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
@@ -317,3 +315,5 @@ docs/
 production.env
 .deploy.env
 staticfiles/
+config.bat
+node_modules
